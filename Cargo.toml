@@ -1,0 +1,58 @@
+[package]
+name = "trevailo-wallet"
+version = "0.1.0"
+edition = "2021"
+description = "Trevailo Coin GUI Wallet"
+
+# ─── ВАЖНО: путь к основному крейту ─────────────────────────────────────────
+# Укажи правильный путь к папке с нодой относительно wallet-gui/
+# Примеры:
+#   если структура такая:
+#     ~/trevailo/           <- нода (там Cargo.toml с name = "trevailo-core")
+#     ~/trevailo-wallet-gui/ <- кошелёк (ты здесь)
+#   то путь: "../trevailo"
+#
+#   если всё в одной папке:
+#     ~/trevailo/
+#       ├── src/           <- нода
+#       └── wallet-gui/    <- кошелёк (ты здесь)
+#   то путь: ".."
+#
+# Поменяй строку ниже на свой путь:
+[dependencies]
+trevailo-core = { path = "../trevailo_blockchein" }
+
+# GUI
+eframe = { version = "0.27", default-features = false, features = [
+    "default_fonts",
+    "glow",
+] }
+egui = "0.27"
+
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# HTTP клиент
+reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], default-features = false }
+
+# Сериализация
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Безопасность памяти
+zeroize = { version = "1", features = ["derive"] }
+
+# QR-коды (рендеринг адреса в receive-экране)
+qrcode = "0.14"
+
+# Диалог выбора файлов
+rfd = "0.14"
+
+# Логирование
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+anyhow = "1"
+dirs = "5"
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
