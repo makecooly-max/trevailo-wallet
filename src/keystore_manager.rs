@@ -48,7 +48,6 @@ pub fn list_keystores(wallets_dir: &Path) -> Vec<KeystoreEntry> {
         .collect()
 }
 
-// ИСПРАВЛЕНО: добавлен PartialEq — нужен для Screen::Unlock(KeystoreEntry)
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeystoreEntry {
     pub name: String,
