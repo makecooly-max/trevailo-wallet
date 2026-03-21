@@ -27,10 +27,7 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-/// Загружает иконку из PNG, встроенного в бинарник через include_bytes!.
-/// Работает одинаково на Linux и Windows — egui сам передаёт её в заголовок окна.
 fn load_icon() -> egui::IconData {
-    // PNG встраивается в бинарник на этапе компиляции — никаких внешних файлов не нужно
     let png_bytes: &[u8] = include_bytes!("../assets/icon.png");
 
     let image = image::load_from_memory(png_bytes)
