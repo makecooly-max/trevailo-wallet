@@ -18,10 +18,8 @@ pub struct NodeInfo {
     pub mempool_size: usize,
     pub utxo_count: usize,
     pub block_reward_tvc: f64,
-    /// true пока следующий блок находится в защищённом периоде (первые 10 000 блоков)
     #[serde(default)]
     pub protected_period: bool,
-    /// Сколько блоков осталось до конца защищённого периода
     #[serde(default)]
     pub protected_blocks_remaining: u64,
 }
@@ -68,26 +66,19 @@ pub struct MineResponse {
     pub transactions: usize,
     pub nonce: u64,
     pub reward_tvc: f64,
-    /// true если блок был намайнен в защищённый период
     #[serde(default)]
     pub protected_period: bool,
 }
 
-/// Статус транзакции для отображения в UI
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
 pub enum TxStatusKind {
-    /// Только что отправлена, ждём подтверждения от ноды
     Sending,
-    /// В мемпуле, ждёт майнинга
     Pending,
-    /// Подтверждена в блоке
     Confirmed { block_height: u64, confirmations: u64 },
-    /// Ошибка
     Failed(String),
 }
 
-/// Исходящая транзакция с трекингом статуса
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct PendingTx {
@@ -168,15 +159,6 @@ impl NodeClient {
         }
     }
 
-    /// Майнинг из кошелька.
-    ///
-    /// В ноду уходит только (miner_address, public_key, signature, timestamp) — приватный ключ
-    /// используется только для подписи локально.
-    ///
-    /// Возвращает Ok(MineResponse) при успехе.
-    /// В защищённый период нода может вернуть:
-    ///   - 429 (rate limit) — слишком рано, нужно подождать
-    ///   - 409 (nonce not found) — не повезло, можно попробовать сразу
     pub fn mine_with_private_key(&self, private_key_hex: &str) -> Result<MineResponse> {
     use trevailo_core::wallet::Wallet;
     use trevailo_core::utils::now_unix;
@@ -187,8 +169,6 @@ impl NodeClient {
     let miner_address = wallet.address();
     let public_key = wallet.public_key.clone();
     let timestamp = now_unix();
-
-    // Формируем подпись: "mine_request:{адрес}:{timestamp}"
     let signing_data = format!("mine_request:{}:{}", miner_address, timestamp);
     let signature = wallet.sign(signing_data.as_bytes());
 
@@ -202,10 +182,6 @@ impl NodeClient {
     self.post("/mine", &body)
 }
 
-    /// Подписать транзакцию локально и отправить через /tx/broadcast.
-    ///
-    /// Приватный ключ НЕ покидает машину пользователя — по сети уходит
-    /// только готовая подписанная транзакция.
     pub fn send_signed_tx(
         &self,
         private_key_hex: &str,
@@ -216,11 +192,9 @@ impl NodeClient {
         use trevailo_core::blockchain::types::COIN;
         use trevailo_core::wallet::Wallet;
 
-        // 1. Восстанавливаем кошелёк из приватного ключа — только в памяти
         let wallet = Wallet::from_private_key(private_key_hex)
             .context("Invalid private key")?;
 
-        // 2. Получаем UTXO с ноды
         let utxos_raw: Vec<UtxoInfo> = self
             .utxos(&wallet.address())
             .context("Failed to fetch UTXOs")?;
@@ -229,7 +203,6 @@ impl NodeClient {
             anyhow::bail!("No UTXOs available — insufficient balance");
         }
 
-        // 3. Конвертируем UtxoInfo → типы из trevailo_core
         let utxos: Vec<trevailo_core::blockchain::types::Utxo> = utxos_raw
             .iter()
             .map(|u| trevailo_core::blockchain::types::Utxo {
@@ -241,7 +214,6 @@ impl NodeClient {
             })
             .collect();
 
-        // 4. Строим и подписываем транзакцию локально
         let amount_trev = (amount_tvc * COIN as f64) as u64;
         let fee_trev = (fee_tvc * COIN as f64) as u64;
 
@@ -251,8 +223,6 @@ impl NodeClient {
 
         let tx_hash = tx.hash.clone();
 
-        // 5. Отправляем подписанную транзакцию на /tx/broadcast
-        //    Приватный ключ в теле запроса отсутствует
         let body = serde_json::json!({ "transaction": tx });
         let _resp: TxResponse = self
             .post("/tx/broadcast", &body)
