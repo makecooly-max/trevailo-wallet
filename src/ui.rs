@@ -156,6 +156,8 @@ pub fn show_pending_txs(app: &mut crate::app::TrevailoWallet, ui: &mut Ui) {
     }
 }
 
+// ─── Wallet Selector ─────────────────────────────────────────────────────────
+
 pub mod wallet_selector {
     use super::*;
     use crate::app::{Screen, TrevailoWallet};
@@ -240,6 +242,8 @@ pub mod wallet_selector {
     }
 }
 
+// ─── Unlock ───────────────────────────────────────────────────────────────────
+
 pub mod unlock {
     use super::*;
     use crate::app::{Screen, TrevailoWallet};
@@ -293,6 +297,8 @@ pub mod unlock {
         });
     }
 }
+
+// ─── Create Wallet ────────────────────────────────────────────────────────────
 
 pub mod create_wallet {
     use super::*;
@@ -380,6 +386,8 @@ pub mod create_wallet {
         });
     }
 }
+
+// ─── Import Wallet ────────────────────────────────────────────────────────────
 
 pub mod import_wallet {
     use super::*;
@@ -476,6 +484,8 @@ pub mod import_wallet {
         });
     }
 }
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
 
 pub mod dashboard {
     use super::*;
@@ -598,6 +608,8 @@ pub mod dashboard {
         }
     }
 }
+
+// ─── Receive ─────────────────────────────────────────────────────────────────
 
 pub mod receive {
     use super::*;
@@ -727,10 +739,14 @@ pub mod receive {
     }
 }
 
+// ─── Send ─────────────────────────────────────────────────────────────────────
+
 pub mod send {
     use super::*;
     use crate::app::TrevailoWallet;
     use crate::node_client::TxStatusKind;
+    #[cfg(not(target_arch = "wasm32"))]
+    use arboard::Clipboard;
 
     pub fn render(app: &mut TrevailoWallet, ui: &mut Ui) {
         ui.label(RichText::new("↑ Отправить TVC").size(22.0));
@@ -766,8 +782,46 @@ pub mod send {
 
         egui::Grid::new("send_form").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
             ui.label("Адрес получателя:");
-            ui.add(egui::TextEdit::singleline(&mut app.send_to)
-                .hint_text("Trevailo адрес...").desired_width(380.0));
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut app.send_to)
+                    .hint_text("Trevailo адрес...").desired_width(300.0));
+                // Кнопка «Вставить» — читаем clipboard через egui (кроссплатформенно: Windows / Linux / macOS)
+                if ui.small_button("📋 Вставить")
+                    .on_hover_text("Вставить адрес из буфера обмена")
+                    .clicked()
+                {
+                    // Ищем Event::Paste уже имеющийся в очереди (редко) ИЛИ
+                    // используем arboard через платформенный бэкенд eframe
+                    let from_events = ui.input(|i| {
+                        i.events.iter().find_map(|e| {
+                            if let egui::Event::Paste(t) = e { Some(t.clone()) } else { None }
+                        })
+                    });
+                    if let Some(text) = from_events {
+                        if !text.trim().is_empty() {
+                            app.send_to = text.trim().to_string();
+                        }
+                    } else {
+                        // Запрашиваем вставку: eframe 0.27 поддерживает clipboard через
+                        // winit/arboard на всех платформах. Симулируем Ctrl+V через events.
+                        // Самый надёжный способ — использовать ctx.send_viewport_cmd с фиктивным
+                        // фокусом, но проще: просто помечаем что ждём paste на следующем кадре.
+                        // eframe/egui сам прочитает clipboard когда TextEdit получит фокус + Ctrl+V.
+                        // Для кнопки «Вставить» без фокуса используем arboard напрямую:
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            if let Ok(mut clipboard) = Clipboard::new() {
+                                if let Ok(text) = clipboard.get_text() {
+                                    let text = text.trim().to_string();
+                                    if !text.is_empty() {
+                                        app.send_to = text;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
             ui.end_row();
 
             ui.label("Сумма (TVC):");
@@ -868,6 +922,8 @@ pub mod send {
         super::show_pending_txs(app, ui);
     }
 }
+
+// ─── UTXOs ────────────────────────────────────────────────────────────────────
 
 pub mod utxos {
     use super::*;
@@ -976,6 +1032,8 @@ pub mod utxos {
     }
 }
 
+// ─── Settings ─────────────────────────────────────────────────────────────────
+
 pub mod settings {
     use super::*;
     use crate::app::TrevailoWallet;
@@ -984,6 +1042,8 @@ pub mod settings {
         ui.label(RichText::new("⚙ Настройки").size(22.0));
         ui.add_space(8.0);
         show_messages(app, ui);
+
+        // ─── Подключение к ноде ───────────────────────────────────────────────
         ui.label(RichText::new("🌐 Нода").strong());
         ui.add_space(4.0);
         egui::Frame::none()
@@ -1009,6 +1069,8 @@ pub mod settings {
             });
 
         ui.add_space(12.0);
+
+        // ─── Платёжный сервер ────────────────────────────────────────────────
         ui.label(RichText::new("💳 Платёжный сервер (покупка TVC)").strong());
         ui.add_space(4.0);
         egui::Frame::none()
@@ -1035,6 +1097,8 @@ pub mod settings {
 
         ui.add_space(12.0);
         ui.separator();
+
+        // ─── Авто-блокировка ──────────────────────────────────────────────────
         ui.label(RichText::new("🔒 Безопасность").strong());
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -1044,6 +1108,8 @@ pub mod settings {
         let mins = app.auto_lock_secs / 60;
         ui.label(RichText::new(format!("Кошелёк заблокируется через {} мин бездействия", mins))
             .size(11.0).color(Color32::GRAY));
+
+        // ─── Смена пароля ─────────────────────────────────────────────────────
         if app.current_wallet.is_some() {
             ui.add_space(12.0);
             ui.separator();
@@ -1104,6 +1170,8 @@ pub mod settings {
                     }
                 }
             });
+
+            // ─── Информация о кошельке ────────────────────────────────────────
             ui.add_space(12.0);
             ui.separator();
             ui.label(RichText::new("💼 Текущий кошелёк").strong());
@@ -1111,10 +1179,73 @@ pub mod settings {
             if let Some(wallet) = &app.current_wallet {
                 let addr = wallet.address.clone();
                 let pk = wallet.public_key.clone();
+                let privkey_opt = wallet.private_key().map(|s| s.to_string());
                 let file = wallet.file_path.to_string_lossy().to_string();
                 super::address_field(ui, "Адрес", &addr);
                 ui.add_space(2.0);
                 super::address_field(ui, "Публичный ключ", &pk);
+                ui.add_space(2.0);
+
+                // ─── Приватный ключ ───────────────────────────────────────────
+                ui.label(RichText::new("Приватный ключ:").small().color(Color32::GRAY));
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(254, 243, 199))
+                    .rounding(6.0)
+                    .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new("⚠ Никогда не передавайте приватный ключ третьим лицам!")
+                                .size(11.0)
+                                .color(Color32::from_rgb(146, 64, 14)),
+                        );
+                    });
+                ui.add_space(2.0);
+                if let Some(privkey) = &privkey_opt {
+                    let privkey_clone = privkey.clone();
+                    ui.horizontal(|ui| {
+                        if app.show_private_key {
+                            let short = if privkey_clone.len() > 20 {
+                                format!("{}…{}", &privkey_clone[..8], &privkey_clone[privkey_clone.len()-8..])
+                            } else {
+                                privkey_clone.clone()
+                            };
+                            ui.monospace(RichText::new(&short).size(11.0).color(Color32::from_rgb(185, 28, 28)));
+                        } else {
+                            ui.monospace(RichText::new("••••••••••••••••••••••••••••••••").size(11.0).color(Color32::GRAY));
+                        }
+                        if ui.small_button(if app.show_private_key { "🙈 Скрыть" } else { "👁 Показать" }).clicked() {
+                            app.show_private_key = !app.show_private_key;
+                        }
+                        if app.show_private_key {
+                            if ui.small_button("📋 Копировать").on_hover_text("Скопировать приватный ключ").clicked() {
+                                ui.output_mut(|o| o.copied_text = privkey_clone.clone());
+                            }
+                        }
+                    });
+                    if app.show_private_key {
+                        ui.add_space(2.0);
+                        // Показываем полный ключ в TextEdit (только для чтения) для удобного копирования
+                        let mut full = privkey_clone.clone();
+                        ui.add(
+                            egui::TextEdit::singleline(&mut full)
+                                .desired_width(380.0)
+                                .font(egui::TextStyle::Monospace)
+                        );
+                    }
+                } else {
+                    egui::Frame::none()
+                        .fill(Color32::from_rgb(239, 246, 255))
+                        .rounding(6.0)
+                        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new("🔒 Кошелёк заблокирован — разблокируйте для просмотра ключа.")
+                                    .size(11.0)
+                                    .color(Color32::from_rgb(37, 99, 235)),
+                            );
+                        });
+                }
+
                 ui.add_space(2.0);
                 ui.label(RichText::new("Файл кошелька:").small().color(Color32::GRAY));
                 ui.horizontal(|ui| {
@@ -1124,6 +1255,8 @@ pub mod settings {
                     }
                 });
             }
+
+            // ─── Удаление кошелька ────────────────────────────────────────────
             ui.add_space(12.0);
             ui.separator();
             ui.label(RichText::new("⚠ Опасная зона").strong().color(Color32::from_rgb(185, 28, 28)));
@@ -1169,6 +1302,8 @@ pub mod settings {
                     });
             }
         }
+
+        // ─── О программе ──────────────────────────────────────────────────────
         ui.add_space(12.0);
         ui.separator();
         ui.label(RichText::new("ℹ О программе").strong());
@@ -1177,11 +1312,17 @@ pub mod settings {
         ui.label(RichText::new("Ключи хранятся локально. Шифрование: AES-256-GCM + Argon2id.")
             .size(11.0).color(Color32::GRAY));
     }
-}
+} // end mod settings
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Вкладка "Купить TVC"
+// ═════════════════════════════════════════════════════════════════════════════
 
 pub mod buy {
     use super::*;
     use crate::app::{BuyOrderStatus, Screen, TrevailoWallet};
+
+    // ── HTTP helpers (блокирующие — вызываем из egui потока) ─────────────────
 
     #[derive(serde::Deserialize)]
     struct PriceResp {
@@ -1302,6 +1443,8 @@ pub mod buy {
         { let _ = std::process::Command::new("xdg-open").arg(url).spawn(); }
     }
 
+    // ── Render ───────────────────────────────────────────────────────────────
+
     pub fn render(app: &mut TrevailoWallet, ui: &mut Ui) {
         ui.label(RichText::new("💳 Купить TVC").size(22.0));
         ui.add_space(8.0);
@@ -1317,6 +1460,8 @@ pub mod buy {
                 return;
             }
         };
+
+        // ── Обновляем цену раз в 60 сек ──────────────────────────────────────
         if app.buy_price_last_fetch.elapsed() > std::time::Duration::from_secs(60) {
             if let Some(p) = fetch_price(crate::app::PAYMENT_URL) {
                 app.buy_price_usd = p.tvc_usd;
@@ -1325,6 +1470,8 @@ pub mod buy {
                 app.buy_price_last_fetch = std::time::Instant::now();
             }
         }
+
+        // ── Обновляем доступный баланс раз в 15 сек ──────────────────────────
         if app.buy_availability_last_fetch.elapsed() > std::time::Duration::from_secs(15) {
             if let Some(a) = fetch_availability(crate::app::PAYMENT_URL) {
                 app.buy_available_tvc = a.available_tvc;
@@ -1335,6 +1482,8 @@ pub mod buy {
                 app.buy_availability_last_fetch = std::time::Instant::now();
             }
         }
+
+        // ── Polling статуса заказа ────────────────────────────────────────────
         let (poll_order_id, poll_attempts) = match &app.buy_status {
             BuyOrderStatus::WaitingPayment { order_id } => {
                 if app.buy_poll_timer.elapsed() > std::time::Duration::from_secs(5) {
@@ -1357,6 +1506,7 @@ pub mod buy {
 
         if let Some(oid) = poll_order_id {
             let attempts = poll_attempts + 1;
+            // Таймаут через ~5 минут (75 попыток × 4 сек)
             if attempts > 75 {
                 app.buy_status = BuyOrderStatus::Error(
                     "Время ожидания оплаты истекло. Попробуйте снова.".to_string(),
@@ -1406,7 +1556,12 @@ pub mod buy {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs(4));
         }
 
+        // ═════════════════════════════════════════════════════════════════════
+        // Отображение по статусу
+        // ═════════════════════════════════════════════════════════════════════
+
         match app.buy_status.clone() {
+            // ── Главная форма покупки ─────────────────────────────────────────
             BuyOrderStatus::Idle | BuyOrderStatus::Error(_) => {
                 // Ошибка (если есть)
                 if let BuyOrderStatus::Error(err_msg) = app.buy_status.clone() {
@@ -1432,6 +1587,7 @@ pub mod buy {
                 render_buy_form(app, ui, &buyer_address);
             }
 
+            // ── Создаём заказ ────────────────────────────────────────────────
             BuyOrderStatus::CreatingOrder => {
                 ui.add_space(40.0);
                 ui.vertical_centered(|ui| {
@@ -1445,11 +1601,13 @@ pub mod buy {
                 });
             }
 
+            // ── Ждём оплаты ──────────────────────────────────────────────────
             BuyOrderStatus::WaitingPayment { ref order_id }
             | BuyOrderStatus::Polling { ref order_id, .. } => {
                 render_waiting_payment(app, ui, order_id);
             }
 
+            // ── Успешно доставлено ────────────────────────────────────────────
             BuyOrderStatus::Delivered {
                 ref order_id,
                 ref tx_hash,
@@ -1460,8 +1618,10 @@ pub mod buy {
         }
     }
 
+    // ── Форма выбора суммы и провайдера ──────────────────────────────────────
 
     fn render_buy_form(app: &mut TrevailoWallet, ui: &mut Ui, buyer_address: &str) {
+        // ─── Информационный блок с ценой ─────────────────────────────────────
         egui::Frame::none()
             .fill(Color32::from_rgb(238, 242, 255))
             .rounding(10.0)
@@ -1496,6 +1656,7 @@ pub mod buy {
 
         ui.add_space(8.0);
 
+        // ─── Доступный остаток ────────────────────────────────────────────────
         egui::Frame::none()
             .fill(if app.buy_available_tvc > 0.0 {
                 Color32::from_rgb(240, 253, 244)
@@ -1603,6 +1764,8 @@ pub mod buy {
         }
 
         ui.add_space(16.0);
+
+        // ─── Способ оплаты ────────────────────────────────────────────────────
         ui.label(RichText::new("Способ оплаты").strong());
         ui.add_space(6.0);
         egui::Frame::none()
@@ -1624,6 +1787,8 @@ pub mod buy {
             });
 
         ui.add_space(16.0);
+
+        // ─── Адрес получателя ─────────────────────────────────────────────────
         ui.label(RichText::new("TVC придут на адрес:").small().color(Color32::GRAY));
         ui.horizontal(|ui| {
             let addr_display = if buyer_address.len() > 44 {
@@ -1640,6 +1805,9 @@ pub mod buy {
         });
 
         ui.add_space(20.0);
+
+        // ─── Кнопка "Купить" ──────────────────────────────────────────────────
+        // Эффективный максимум — не больше доступного остатка
         let effective_max = if app.buy_available_tvc > 0.0 {
             app.buy_max_tvc.min(app.buy_available_tvc)
         } else {
@@ -1717,6 +1885,8 @@ pub mod buy {
         );
     }
 
+    // ── Экран ожидания оплаты ────────────────────────────────────────────────
+
     fn render_waiting_payment(app: &mut TrevailoWallet, ui: &mut Ui, order_id: &str) {
         ui.add_space(30.0);
         ui.vertical_centered(|ui| {
@@ -1746,6 +1916,8 @@ pub mod buy {
             );
 
             ui.add_space(20.0);
+
+            // Кнопка "Отменить" — освобождает резервирование на сервере
             let cancel_btn = egui::Button::new(
                 RichText::new("✕ Отменить покупку").color(Color32::from_rgb(239, 68, 68)),
             )
@@ -1775,6 +1947,8 @@ pub mod buy {
         // Request repaint to keep polling
         ui.ctx().request_repaint_after(std::time::Duration::from_secs(4));
     }
+
+    // ── Экран успешной покупки ────────────────────────────────────────────────
 
     fn render_success(
         app: &mut TrevailoWallet,
@@ -1876,10 +2050,15 @@ pub mod buy {
             });
         });
     }
-}
+} // end mod buy
+
+// ─── Mining ─────────────────────────────────────────────────────────────────
 pub mod mining {
     use super::*;
     use crate::app::{MiningOutcome, TrevailoWallet};
+
+    /// Преобразует Result<MineResponse> от ноды в типизированный MiningOutcome.
+    /// Распознаёт HTTP 429 (rate limit) и HTTP 409 (nonce not found) по тексту ошибки.
     fn resolve_mine_outcome(result: anyhow::Result<crate::node_client::MineResponse>) -> MiningOutcome {
         match result {
             Ok(resp) => MiningOutcome::Success(resp),
@@ -1938,6 +2117,8 @@ pub mod mining {
                 ui.add_space(10.0);
             }
         }
+
+        // Poll background mining result (manual or auto).
         if let Some(rx) = &app.mining_task_rx {
             use std::sync::mpsc::TryRecvError;
             match rx.try_recv() {
@@ -1967,6 +2148,8 @@ pub mod mining {
                             app.set_error(format!("Ошибка майнинга: {}", e));
                         }
                     }
+
+                    // Для ручного майнинга завершаем задачу, для автo оставляем.
                     if !app.mining_auto_enabled {
                         app.mining_task_rx = None;
                         app.mining_in_progress = false;
@@ -2060,6 +2243,7 @@ pub mod mining {
                 ui.separator();
                 ui.add_space(14.0);
 
+                // Ручной майнинг
                 ui.horizontal(|ui| {
                     let can_manual = unlocked
                         && !app.mining_in_progress
@@ -2171,6 +2355,7 @@ pub mod mining {
                             stop.store(true, std::sync::atomic::Ordering::Relaxed);
                         }
                         app.mining_auto_stop = None;
+                        // Поток может ещё отправить один результат — это нормально.
                         app.mining_in_progress = false;
                     }
                 }
