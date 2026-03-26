@@ -27,11 +27,14 @@ pub enum Screen {
 #[derive(Debug, Clone)]
 pub enum MiningOutcome {
     Success(MineResponse),
+    /// Нода вернула 429 — rate limit. Поле — секунды ожидания (если удалось распарсить).
     RateLimited(u64),
+    /// Нода вернула 409 — nonce не найден в защищённом диапазоне. Можно попробовать снова.
     NonceNotFound,
     Error(String),
 }
 
+/// Статус заказа на покупку TVC
 #[derive(Debug, Clone, PartialEq)]
 pub enum BuyOrderStatus {
     Idle,
@@ -78,20 +81,24 @@ pub struct TrevailoWallet {
 
     pending_txs_owner: Option<String>,
     pub confirm_delete: bool,
+    pub show_private_key: bool,
 
+    // ── Покупка TVC ──────────────────────────────────────────────────────────
     pub buy_tvc_amount: String,
     pub buy_provider: String,
     pub buy_status: BuyOrderStatus,
     pub buy_price_usd: f64,
-
+    /// Минимум/максимум покупки — читается с payment-backend /price
     pub buy_min_tvc: f64,
     pub buy_max_tvc: f64,
+    /// Доступный баланс мастер-кошелька за вычетом резервирований
     pub buy_available_tvc: f64,
     /// Когда последний раз обновляли доступность
     pub buy_availability_last_fetch: std::time::Instant,
     pub buy_price_last_fetch: std::time::Instant,
     pub buy_poll_timer: std::time::Instant,
 
+    // ── Mining UI state ────────────────────────────────────────────────────
     pub mining_in_progress: bool,
     pub mining_auto_enabled: bool,
     pub mining_auto_interval_secs: u64,
@@ -100,9 +107,11 @@ pub struct TrevailoWallet {
     pub last_mining: Option<MineResponse>,
 }
 
+// Захардкоженные URL — менять только в исходном коде при выпуске обновлений
 pub const NODE_URL: &str = "http://31.131.21.11:8080";
 pub const PAYMENT_URL: &str = "http://31.131.21.11:3000";
 
+// Ключи для eframe::Storage
 const KEY_AUTO_LOCK: &str = "auto_lock_secs";
 
 impl TrevailoWallet {
@@ -153,6 +162,7 @@ impl TrevailoWallet {
             auto_lock_secs,
             pending_txs_owner: None,
             confirm_delete: false,
+            show_private_key: false,
             buy_tvc_amount: "100".to_string(),
             buy_provider: "nowpayments".to_string(),
             buy_status: BuyOrderStatus::Idle,
@@ -176,6 +186,7 @@ impl TrevailoWallet {
         app
     }
 
+    /// Переключиться на кошелёк: очищаем все данные предыдущего
     pub fn switch_wallet(&mut self, wallet: LoadedWallet) {
         let new_address = wallet.address.clone();
         if self.pending_txs_owner.as_deref() != Some(&new_address) {
@@ -187,8 +198,10 @@ impl TrevailoWallet {
         self.last_refresh = Instant::now().checked_sub(Duration::from_secs(60)).unwrap_or_else(Instant::now);
         self.current_wallet = Some(wallet);
         self.confirm_delete = false;
+        self.show_private_key = false;
         self.clear_messages();
 
+        // Меняем ключи — останавливаем все майнинг-процессы.
         self.mining_in_progress = false;
         self.mining_auto_enabled = false;
         self.mining_task_rx = None;
@@ -199,11 +212,13 @@ impl TrevailoWallet {
         self.last_mining = None;
     }
 
+    /// Выйти из кошелька (блокировка / смена)
     pub fn logout(&mut self) {
         if let Some(w) = &mut self.current_wallet {
             w.lock();
         }
 
+        // Останавливаем автo-майнинг при блокировке/выходе.
         if let Some(stop) = &self.mining_auto_stop {
             stop.store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -217,9 +232,11 @@ impl TrevailoWallet {
         self.utxos = vec![];
         self.screen = Screen::WalletSelector;
         self.confirm_delete = false;
+        self.show_private_key = false;
         self.clear_messages();
     }
 
+    /// Обновить баланс и инфо о ноде
     pub fn refresh_data(&mut self) {
         if self.last_refresh.elapsed() < Duration::from_secs(10) {
             return;
@@ -242,6 +259,7 @@ impl TrevailoWallet {
         }
     }
 
+    /// Обновить статусы pending транзакций — вызывается каждые 3 сек
     pub fn refresh_tx_statuses(&mut self) {
         if self.last_tx_poll.elapsed() < Duration::from_secs(3) {
             return;
@@ -322,6 +340,7 @@ impl TrevailoWallet {
 }
 
 impl eframe::App for TrevailoWallet {
+    /// ИСПРАВЛЕНО: сохраняем настройки при каждом кадре через eframe Storage
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(KEY_AUTO_LOCK, self.auto_lock_secs.to_string());
     }
