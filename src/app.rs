@@ -22,6 +22,7 @@ pub enum Screen {
     Receive,
     Buy,
     Settings,
+    Leaderboard,
 }
 
 #[derive(Debug, Clone)]
@@ -105,6 +106,12 @@ pub struct TrevailoWallet {
     pub mining_task_rx: Option<Receiver<MiningOutcome>>,
     pub mining_auto_stop: Option<Arc<AtomicBool>>,
     pub last_mining: Option<MineResponse>,
+
+    // ── Leaderboard ────────────────────────────────────────────────────────
+    pub leaderboard: Vec<crate::node_client::LeaderboardEntry>,
+    pub leaderboard_loading: bool,
+    pub leaderboard_last_fetch: std::time::Instant,
+    pub leaderboard_error: Option<String>,
 }
 
 // Захардкоженные URL — менять только в исходном коде при выпуске обновлений
@@ -180,6 +187,11 @@ impl TrevailoWallet {
             mining_task_rx: None,
             mining_auto_stop: None,
             last_mining: None,
+
+            leaderboard: vec![],
+            leaderboard_loading: false,
+            leaderboard_last_fetch: Instant::now().checked_sub(Duration::from_secs(300)).unwrap_or_else(Instant::now),
+            leaderboard_error: None,
         };
 
         app.node_connected = app.node_client.health_check();
@@ -331,6 +343,29 @@ impl TrevailoWallet {
         self.success_message = None;
     }
 
+    /// Загрузить/обновить лидерборд — не чаще раз в 30 секунд
+    pub fn refresh_leaderboard(&mut self) {
+        if self.leaderboard_loading {
+            return;
+        }
+        if self.leaderboard_last_fetch.elapsed() < Duration::from_secs(30) && !self.leaderboard.is_empty() {
+            return;
+        }
+        self.leaderboard_loading = true;
+        self.leaderboard_error = None;
+        match self.node_client.leaderboard() {
+            Ok(resp) => {
+                self.leaderboard = resp.leaderboard;
+                self.leaderboard_last_fetch = Instant::now();
+                self.leaderboard_error = None;
+            }
+            Err(e) => {
+                self.leaderboard_error = Some(format!("Ошибка загрузки: {}", e));
+            }
+        }
+        self.leaderboard_loading = false;
+    }
+
     pub fn pending_count(&self) -> usize {
         self.pending_txs
             .iter()
@@ -367,6 +402,11 @@ impl eframe::App for TrevailoWallet {
             ctx.request_repaint_after(repaint_interval);
         }
 
+        if self.screen == Screen::Leaderboard {
+            self.refresh_leaderboard();
+            ctx.request_repaint_after(Duration::from_secs(30));
+        }
+
         if ctx.input(|i| i.pointer.any_click() || i.key_pressed(egui::Key::Space)) {
             self.reset_auto_lock_timer();
         }
@@ -387,6 +427,7 @@ impl eframe::App for TrevailoWallet {
                     Screen::Receive => crate::ui::receive::render(self, ui),
                     Screen::Buy => crate::ui::buy::render(self, ui),
                     Screen::Settings => crate::ui::settings::render(self, ui),
+                    Screen::Leaderboard => crate::ui::leaderboard::render(self, ui),
                 }
             });
         });
@@ -396,105 +437,126 @@ impl eframe::App for TrevailoWallet {
 impl TrevailoWallet {
     fn render_top_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
+            let is_auth_screen = matches!(
+                self.screen,
+                Screen::WalletSelector | Screen::CreateWallet | Screen::ImportWallet
+            );
+            let is_unlock = matches!(self.screen, Screen::Unlock(_));
+
+            // ── Ряд 1: логотип + имя кошелька + статус + выйти ──────────────
+            ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new("₮ Trevailo Wallet")
-                        .font(FontId::proportional(18.0))
+                    RichText::new("T Trevailo Wallet")
+                        .font(FontId::proportional(16.0))
                         .color(Color32::from_rgb(99, 102, 241)),
                 );
 
-                ui.separator();
-
                 let pending_count = self.pending_count();
                 if pending_count > 0 {
-                    ui.label(
-                        RichText::new(format!("⏳ {} pending", pending_count))
-                            .color(Color32::from_rgb(234, 179, 8))
-                            .size(12.0),
-                    );
                     ui.separator();
+                    ui.label(
+                        RichText::new(format!("({} pending)", pending_count))
+                            .color(Color32::from_rgb(234, 179, 8))
+                            .size(11.0),
+                    );
                 }
 
-                let is_auth_screen = matches!(
-                    self.screen,
-                    Screen::WalletSelector | Screen::CreateWallet | Screen::ImportWallet
-                );
+                if !is_auth_screen && !is_unlock {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Выйти").clicked() {
+                            self.logout();
+                        }
 
-                if !is_auth_screen {
-                    if matches!(self.screen, Screen::Unlock(_)) {
+                        let (dot, label) = if self.node_connected {
+                            (Color32::from_rgb(34, 197, 94), "Подключено")
+                        } else {
+                            (Color32::from_rgb(239, 68, 68), "Нет связи")
+                        };
+                        ui.colored_label(dot, RichText::new(format!("● {}", label)).size(11.0));
+                        ui.separator();
+
+                        if let Some(w) = &self.current_wallet {
+                            // Имя кошелька — обрезаем если длинное
+                            let name = &w.name;
+                            let display = if name.len() > 18 {
+                                format!("{}…", &name[..16])
+                            } else {
+                                name.clone()
+                            };
+                            ui.label(
+                                RichText::new(format!("@ {}", display))
+                                    .size(12.0)
+                                    .color(Color32::GRAY),
+                            );
+                        }
+                    });
+                }
+
+                if is_unlock {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("← Назад").clicked() {
                             self.screen = Screen::WalletSelector;
                         }
-                    } else {
-                        if ui
-                            .selectable_label(self.screen == Screen::Dashboard, "📊 Главная")
-                            .clicked()
-                        {
-                            self.screen = Screen::Dashboard;
-                        }
-                        if ui
-                            .selectable_label(self.screen == Screen::Mining, "⛏️ Майнинг")
-                            .clicked()
-                        {
-                            self.screen = Screen::Mining;
-                        }
-                        if ui
-                            .selectable_label(self.screen == Screen::Send, "↑ Отправить")
-                            .clicked()
-                        {
-                            self.screen = Screen::Send;
-                        }
-                        if ui
-                            .selectable_label(self.screen == Screen::Receive, "↓ Получить")
-                            .clicked()
-                        {
-                            self.screen = Screen::Receive;
-                        }
-                        if ui
-                            .selectable_label(self.screen == Screen::Buy, "💳 Купить TVC")
-                            .clicked()
-                        {
-                            self.screen = Screen::Buy;
-                        }
-                        if ui
-                            .selectable_label(self.screen == Screen::Utxos, "🪙 UTXO")
-                            .clicked()
-                        {
-                            self.screen = Screen::Utxos;
-                        }
-                        if ui
-                            .selectable_label(self.screen == Screen::Settings, "⚙ Настройки")
-                            .clicked()
-                        {
-                            self.screen = Screen::Settings;
-                            self.confirm_delete = false;
-                        }
-
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if ui.button("🔒 Выйти").clicked() {
-                                    self.logout();
-                                }
-
-                                let (dot, label) = if self.node_connected {
-                                    (Color32::from_rgb(34, 197, 94), "Подключено")
-                                } else {
-                                    (Color32::from_rgb(239, 68, 68), "Нет связи")
-                                };
-                                ui.colored_label(dot, format!("● {}", label));
-
-                                if let Some(w) = &self.current_wallet {
-                                    ui.label(
-                                        RichText::new(format!("👤 {}", w.name))
-                                            .color(Color32::GRAY),
-                                    );
-                                }
-                            },
-                        );
-                    }
+                    });
                 }
             });
+
+            // ── Ряд 2: навигационные вкладки (только когда залогинен) ────────
+            if !is_auth_screen && !is_unlock {
+                ui.add_space(1.0);
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .selectable_label(self.screen == Screen::Dashboard, "Главная")
+                        .clicked()
+                    {
+                        self.screen = Screen::Dashboard;
+                    }
+                    if ui
+                        .selectable_label(self.screen == Screen::Mining, "Майнинг")
+                        .clicked()
+                    {
+                        self.screen = Screen::Mining;
+                    }
+                    if ui
+                        .selectable_label(self.screen == Screen::Send, "Отправить")
+                        .clicked()
+                    {
+                        self.screen = Screen::Send;
+                    }
+                    if ui
+                        .selectable_label(self.screen == Screen::Receive, "Получить")
+                        .clicked()
+                    {
+                        self.screen = Screen::Receive;
+                    }
+                    if ui
+                        .selectable_label(self.screen == Screen::Buy, "Купить TVC")
+                        .clicked()
+                    {
+                        self.screen = Screen::Buy;
+                    }
+                    if ui
+                        .selectable_label(self.screen == Screen::Utxos, "UTXO")
+                        .clicked()
+                    {
+                        self.screen = Screen::Utxos;
+                    }
+                    if ui
+                        .selectable_label(self.screen == Screen::Leaderboard, "Лидерборд")
+                        .clicked()
+                    {
+                        self.screen = Screen::Leaderboard;
+                    }
+                    if ui
+                        .selectable_label(self.screen == Screen::Settings, "Настройки")
+                        .clicked()
+                    {
+                        self.screen = Screen::Settings;
+                        self.confirm_delete = false;
+                    }
+                });
+            }
         });
     }
 }
