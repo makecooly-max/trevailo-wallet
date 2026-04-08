@@ -2371,3 +2371,251 @@ pub mod mining {
             });
     }
 }
+
+pub mod leaderboard {
+    use egui::{Color32, RichText, Ui};
+
+    pub fn render(app: &mut crate::app::TrevailoWallet, ui: &mut Ui) {
+        ui.add_space(8.0);
+
+        // ── Заголовок ──────────────────────────────────────────────────────
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Лидерборд майнеров")
+                    .size(22.0)
+                    .color(Color32::from_rgb(99, 102, 241))
+                    .strong(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if app.leaderboard_loading {
+                    ui.spinner();
+                    ui.label(RichText::new("Загрузка…").color(Color32::GRAY).size(12.0));
+                } else {
+                    if crate::ui::primary_button(ui, "Обновить").clicked() {
+                        // Сбрасываем таймер чтобы принудительно обновить
+                        app.leaderboard_last_fetch = std::time::Instant::now()
+                            .checked_sub(std::time::Duration::from_secs(300))
+                            .unwrap_or_else(std::time::Instant::now);
+                        app.leaderboard.clear();
+                        app.refresh_leaderboard();
+                    }
+                    if !app.leaderboard.is_empty() {
+                        let elapsed = app.leaderboard_last_fetch.elapsed().as_secs();
+                        ui.label(
+                            RichText::new(format!("Обновлено {}с назад", elapsed))
+                                .size(11.0)
+                                .color(Color32::GRAY),
+                        );
+                    }
+                }
+            });
+        });
+
+        ui.add_space(4.0);
+
+        // ── Ошибка ─────────────────────────────────────────────────────────
+        if let Some(err) = &app.leaderboard_error.clone() {
+            egui::Frame::none()
+                .fill(Color32::from_rgb(254, 226, 226))
+                .rounding(6.0)
+                .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(format!("⚠ {}", err)).color(Color32::from_rgb(185, 28, 28)));
+                });
+            ui.add_space(8.0);
+        }
+
+        // ── Если нет данных ────────────────────────────────────────────────
+        if app.leaderboard.is_empty() && !app.leaderboard_loading {
+            ui.add_space(40.0);
+            ui.vertical_centered(|ui| {
+                ui.label(RichText::new("Нет данных о майнерах").size(16.0).color(Color32::GRAY));
+                ui.add_space(4.0);
+                ui.label(RichText::new("Нажмите «Обновить» для загрузки").size(12.0).color(Color32::GRAY));
+            });
+            return;
+        }
+
+        ui.add_space(4.0);
+
+        // ── Сводка ─────────────────────────────────────────────────────────
+        let total_blocks: u64 = app.leaderboard.iter().map(|e| e.blocks_mined).sum();
+        let total_miners = app.leaderboard.len();
+
+        egui::Frame::none()
+            .fill(Color32::from_rgb(238, 242, 255))
+            .rounding(8.0)
+            .inner_margin(egui::Margin::symmetric(16.0, 10.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(format!("{}", total_miners)).size(20.0).strong().color(Color32::from_rgb(99, 102, 241)));
+                        ui.label(RichText::new("Майнеров").size(11.0).color(Color32::GRAY));
+                    });
+                    ui.add_space(32.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(format!("{}", total_blocks)).size(20.0).strong().color(Color32::from_rgb(99, 102, 241)));
+                        ui.label(RichText::new("Всего блоков").size(11.0).color(Color32::GRAY));
+                    });
+                });
+            });
+
+        ui.add_space(12.0);
+
+        // ── Таблица ────────────────────────────────────────────────────────
+        // Шапка таблицы
+        egui::Frame::none()
+            .fill(Color32::from_rgb(243, 244, 246))
+            .rounding(egui::Rounding { nw: 8.0, ne: 8.0, sw: 0.0, se: 0.0 })
+            .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("#").size(12.0).color(Color32::GRAY).strong());
+                    ui.add_space(16.0);
+                    ui.label(RichText::new("Адрес кошелька").size(12.0).color(Color32::GRAY).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Баланс (TVC)").size(12.0).color(Color32::GRAY).strong());
+                        ui.add_space(32.0);
+                        ui.label(RichText::new("Награда (TVC)").size(12.0).color(Color32::GRAY).strong());
+                        ui.add_space(32.0);
+                        ui.label(RichText::new("Блоков").size(12.0).color(Color32::GRAY).strong());
+                    });
+                });
+            });
+
+        // Строки таблицы
+        let current_addr = app.current_wallet.as_ref().map(|w| w.address.clone());
+
+        egui::Frame::none()
+            .fill(Color32::from_rgb(255, 255, 255))
+            .rounding(egui::Rounding { nw: 0.0, ne: 0.0, sw: 8.0, se: 8.0 })
+            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(229, 231, 235)))
+            .show(ui, |ui| {
+                let entries: Vec<_> = app.leaderboard.clone();
+                for (idx, entry) in entries.iter().enumerate() {
+                    let rank = idx + 1;
+                    let is_me = current_addr.as_deref() == Some(&entry.address);
+
+                    let row_fill = if is_me {
+                        Color32::from_rgb(238, 242, 255) // подсветка своего кошелька
+                    } else if rank % 2 == 0 {
+                        Color32::from_rgb(249, 250, 251)
+                    } else {
+                        Color32::from_rgb(255, 255, 255)
+                    };
+
+                    egui::Frame::none()
+                        .fill(row_fill)
+                        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                // Медаль / ранг — используем текстовые символы без эмодзи (egui не грузит цветные эмодзи)
+                                let (rank_label, rank_bg, rank_fg) = match rank {
+                                    1 => ("#1", Color32::from_rgb(254, 240, 138), Color32::from_rgb(133, 77, 14)),
+                                    2 => ("#2", Color32::from_rgb(226, 232, 240), Color32::from_rgb(71, 85, 105)),
+                                    3 => ("#3", Color32::from_rgb(254, 215, 170), Color32::from_rgb(154, 52, 18)),
+                                    _ => ("",   Color32::TRANSPARENT,             Color32::GRAY),
+                                };
+
+                                if rank <= 3 {
+                                    egui::Frame::none()
+                                        .fill(rank_bg)
+                                        .rounding(6.0)
+                                        .inner_margin(egui::Margin::symmetric(7.0, 3.0))
+                                        .show(ui, |ui| {
+                                            ui.label(RichText::new(rank_label).size(12.0).color(rank_fg).strong());
+                                        });
+                                } else {
+                                    ui.label(RichText::new(format!("{}", rank)).size(13.0).color(Color32::GRAY).strong());
+                                }
+                                ui.add_space(8.0);
+
+                                // Адрес (укороченный) + бейдж «Это я»
+                                let addr = &entry.address;
+                                let short = if addr.len() > 40 {
+                                    format!("{}…{}", &addr[..20], &addr[addr.len()-8..])
+                                } else {
+                                    addr.clone()
+                                };
+
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.monospace(
+                                            RichText::new(&short)
+                                                .size(12.0)
+                                                .color(Color32::from_rgb(55, 65, 81)),
+                                        );
+                                        if ui.small_button("📋").on_hover_text("Скопировать").clicked() {
+                                            ui.output_mut(|o| o.copied_text = addr.clone());
+                                        }
+                                        if is_me {
+                                            egui::Frame::none()
+                                                .fill(Color32::from_rgb(99, 102, 241))
+                                                .rounding(4.0)
+                                                .inner_margin(egui::Margin::symmetric(5.0, 2.0))
+                                                .show(ui, |ui| {
+                                                    ui.label(RichText::new("Это я").size(10.0).color(Color32::WHITE));
+                                                });
+                                        }
+                                    });
+                                });
+
+                                // Правая часть: блоки, награда, баланс
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.add_space(8.0);
+                                    // Баланс
+                                    let bal_color = if entry.balance_tvc > 0.0 {
+                                        Color32::from_rgb(22, 163, 74)
+                                    } else {
+                                        Color32::GRAY
+                                    };
+                                    ui.label(
+                                        RichText::new(format!("{:.3}", entry.balance_tvc))
+                                            .size(13.0)
+                                            .color(bal_color)
+                                            .strong(),
+                                    );
+                                    ui.add_space(32.0);
+
+                                    // Суммарная награда
+                                    ui.label(
+                                        RichText::new(format!("{:.2}", entry.total_rewarded_tvc))
+                                            .size(13.0)
+                                            .color(Color32::from_rgb(99, 102, 241)),
+                                    );
+                                    ui.add_space(32.0);
+
+                                    // Блоков намайнено
+                                    ui.label(
+                                        RichText::new(format!("{}", entry.blocks_mined))
+                                            .size(14.0)
+                                            .strong()
+                                            .color(Color32::from_rgb(30, 64, 175)),
+                                    );
+                                });
+                            });
+                        });
+
+                    if idx < app.leaderboard.len() - 1 {
+                        ui.separator();
+                    }
+                }
+            });
+
+        ui.add_space(16.0);
+
+        // ── Легенда ────────────────────────────────────────────────────────
+        ui.horizontal(|ui| {
+            egui::Frame::none()
+                .fill(Color32::from_rgb(238, 242, 255))
+                .rounding(4.0)
+                .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                .show(ui, |ui| {
+                    ui.label(RichText::new("  Это я").size(11.0).color(Color32::from_rgb(99, 102, 241)));
+                });
+            ui.add_space(8.0);
+            ui.label(RichText::new("— ваш кошелёк выделен цветом").size(11.0).color(Color32::GRAY));
+        });
+    }
+}
