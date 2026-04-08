@@ -50,6 +50,22 @@ pub struct TxResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
+pub struct LeaderboardEntry {
+    pub address: String,
+    pub blocks_mined: u64,
+    pub total_rewarded_tvc: f64,
+    pub balance_tvc: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct LeaderboardResponse {
+    pub total_miners: usize,
+    pub leaderboard: Vec<LeaderboardEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct MempoolStats {
     pub total: usize,
     pub valid: usize,
@@ -116,6 +132,10 @@ impl NodeClient {
         self.get("/info")
     }
 
+    pub fn leaderboard(&self) -> Result<LeaderboardResponse> {
+        self.get("/leaderboard")
+    }
+
     pub fn balance(&self, address: &str) -> Result<BalanceInfo> {
         self.get(&format!("/wallet/{}/balance", address))
     }
@@ -159,28 +179,58 @@ impl NodeClient {
         }
     }
 
+    /// Майнинг с PoW на стороне клиента (не на сервере ноды).
+    /// 1. Запрашивает шаблон блока у ноды (GET /block_template)
+    /// 2. Выполняет перебор nonce локально на машине пользователя
+    /// 3. Отправляет готовый намайненный блок ноде (POST /submit_block)
+    /// Если нода отвечает «Invalid prev_hash» (цепочка продвинулась пока шёл PoW),
+    /// автоматически берём свежий шаблон и повторяем — до MAX_STALE_RETRIES раз.
     pub fn mine_with_private_key(&self, private_key_hex: &str) -> Result<MineResponse> {
-    use trevailo_core::wallet::Wallet;
-    use trevailo_core::utils::now_unix;
+        use trevailo_core::wallet::Wallet;
+        use trevailo_core::blockchain::miner::Miner;
 
-    let wallet = Wallet::from_private_key(private_key_hex)
-        .context("Invalid private key")?;
+        const MAX_STALE_RETRIES: usize = 3;
 
-    let miner_address = wallet.address();
-    let public_key = wallet.public_key.clone();
-    let timestamp = now_unix();
-    let signing_data = format!("mine_request:{}:{}", miner_address, timestamp);
-    let signature = wallet.sign(signing_data.as_bytes());
+        let wallet = Wallet::from_private_key(private_key_hex)
+            .context("Invalid private key")?;
+        let miner_address = wallet.address();
 
-    let body = serde_json::json!({
-        "miner_address": miner_address,
-        "public_key": public_key,
-        "signature": signature,
-        "timestamp": timestamp,
-    });
+        for attempt in 0..=MAX_STALE_RETRIES {
+            // Шаг 1: получить свежий шаблон блока у ноды
+            let template: serde_json::Value = self
+                .get(&format!("/block_template?miner_address={}", miner_address))
+                .context("Failed to get block template")?;
 
-    self.post("/mine", &body)
-}
+            let block: trevailo_core::blockchain::types::Block =
+                serde_json::from_value(template["block"].clone())
+                    .context("Failed to parse block template")?;
+
+            // Шаг 2: PoW выполняется здесь, на компьютере пользователя
+            let mined = Miner::mine(block);
+
+            // Шаг 3: отправить готовый блок ноде для валидации и добавления в цепочку
+            let body = serde_json::json!({ "block": mined });
+            let result: Result<MineResponse> = self.post("/submit_block", &body);
+
+            match result {
+                Ok(resp) => return Ok(resp),
+                Err(e) => {
+                    let msg = e.to_string();
+                    // Цепочка продвинулась пока мы майнили — берём новый шаблон
+                    if msg.contains("Invalid prev_hash") && attempt < MAX_STALE_RETRIES {
+                        tracing::warn!(
+                            "⚠ Stale block template (attempt {}/{}), retrying with fresh tip…",
+                            attempt + 1, MAX_STALE_RETRIES
+                        );
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        anyhow::bail!("Failed to submit block after {} retries (chain too fast?)", MAX_STALE_RETRIES)
+    }
 
     pub fn send_signed_tx(
         &self,
