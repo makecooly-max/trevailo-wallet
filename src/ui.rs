@@ -1435,13 +1435,39 @@ pub mod buy {
     }
 
     fn open_browser(url: &str) {
-        #[cfg(target_os = "windows")]
-        { let _ = std::process::Command::new("cmd").args(["/c", "start", url]).spawn(); }
-        #[cfg(target_os = "macos")]
-        { let _ = std::process::Command::new("open").arg(url).spawn(); }
-        #[cfg(target_os = "linux")]
-        { let _ = std::process::Command::new("xdg-open").arg(url).spawn(); }
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        eprintln!("Отклонено: разрешены только http/https ссылки");
+        return;
     }
+        #[cfg(target_os = "windows")]
+        { 
+        //PowerShell вместо cmd /c. Это исключает инъекцию команд через символ "&"
+            let _ = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", "Start-Process", url])
+                .spawn(); 
+        }
+        #[cfg(target_os = "macos")]
+        { 
+            let _ = std::process::Command::new("open").arg(url).spawn(); 
+        }
+        #[cfg(target_os = "linux")]
+        { 
+            // символ "--" запрещает xdg-open воспринимать url как флаг запуска (например, если url начинается с "-")
+            let _ = std::process::Command::new("xdg-open").arg("--").arg(url).spawn(); 
+        }
+    }
+
+        //==============
+        // или в
+        //
+        // [dependencies]
+        // webbrowser = "0.8"
+        //fn open_browser(url: &str) {
+        //        if let Err(e) = webbrowser::open(url) {
+        //            tracing::error!("Не удалось безопасно открыть браузер: {}", e);
+        //        }
+        //   }
+        //=============
 
     // ── Render ───────────────────────────────────────────────────────────────
 
